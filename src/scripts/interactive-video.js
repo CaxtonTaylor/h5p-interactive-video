@@ -45,12 +45,34 @@ function InteractiveVideo(params, id, contentData) {
   var loopVideo;
 
   // Inheritance
-  H5P.EventDispatcher.call(self);
+  //H5P.EventDispatcher.call(self);
+  H5P.Question.call(this, 'interactive-video');
 
   // Keep track of content ID
   self.contentId = id;
   self.contentData = contentData;
   self.instanceIndex = getAndIncrementGlobalCounter();
+
+  // Set default behavior.
+  this.params = $.extend(true, {
+    taskDescription: "",
+    textField: "This is a *nice*, *flexible* content type.",
+    overallFeedback: [],
+    behaviour: {
+      enableRetry: true,
+      enableSolutionsButton: true,
+      enableCheckButton: true,
+      showScorePoints: true
+    },
+    checkAnswerButton: "Check",
+    tryAgainButton: "Retry",
+    showSolutionButton: "Show solution",
+    correctAnswer: "Correct!",
+    incorrectAnswer: "Incorrect!",
+    missedAnswer: "Missed!",
+    displaySolutionDescription:  "Task is updated to contain the solution.",
+    scoreBarLabel: 'You got :num out of :total points'
+  }, params);
 
   // Create dynamic ids
   self.bookmarksMenuId = 'interactive-video-' + this.contentId + '-bookmarks-chooser';
@@ -476,6 +498,11 @@ function InteractiveVideo(params, id, contentData) {
 
     self.accessibility = new Accessibility(self.l10n);
   };
+
+  self.isRoot = function() {
+    return false;
+  };
+
 }
 
 // Inheritance
@@ -590,18 +617,163 @@ InteractiveVideo.prototype.removeSplash = function () {
 };
 
 /**
+ * Add check solution and retry buttons.
+ */
+InteractiveVideo.prototype.addButtons = function () {
+  var self = this;
+  self.$buttonContainer = $('<div/>', {
+    'class': 'h5p-button-bar'
+  });
+
+};
+
+
+/**
+ * Register dom elements
+ *
+ * @see {@link https://github.com/h5p/h5p-question/blob/1558b6144333a431dd71e61c7021d0126b18e252/scripts/question.js#L1236|Called from H5P.Question}
+ */
+InteractiveVideo.prototype.registerDomElements = function () {
+  var that = this;
+  this.$inner = $('<div class="h5p-interactive-video-inner"></div>');
+
+  this.initialize();
+
+  // wrap introduction in div with id
+  var introduction = '<div id="' + this.introductionId + '">' + this.params.taskDescription + '</div>';
+
+  // Register description
+  this.setIntroduction(introduction);
+
+  // creates aria descriptions for correct/incorrect/missed
+  //this.createDescriptionsDom().appendTo(this.$inner);
+
+  // Register content
+  this.setContent(this.$inner, {
+    'class': 'h5p-interactive-video'
+  });
+
+  this.$videoWrapper.appendTo(this.$inner);
+  this.$controls.appendTo(this.$inner);
+
+  // 'video only' fallback has no interactions
+  let isAnswerable = false;
+  if (this.interactions) {
+    // interactions require parent this.$inner, recreate with input
+    this.interactions.forEach(function (interaction) {
+      interaction.reCreate();
+      if (interaction.isAnswerable()) {
+        isAnswerable = true;
+      }
+    });
+  }
+
+  // Show the score star if there are endscreens and interactions available or user is editing
+  this.hasStar = this.editor || this.options.assets.endscreens !== undefined && isAnswerable;
+
+  // Video with interactions
+  this.attachVideo(this.$videoWrapper);
+
+  if (this.justVideo) {
+    this.$videoWrapper.find('video').css('minHeight', '200px');
+    this.$inner.children(':not(.h5p-video-wrapper)').remove();
+    return;
+  }
+
+  // read speaker
+  this.$read.appendTo(this.$inner);
+  this.readText = null;
+
+  if (this.editor === undefined) {
+    this.dnb = new H5P.DragNBar([], this.$videoWrapper, this.$inner, {disableEditor: true});
+    // Pause video when opening dialog
+    this.dnb.dialog.on('open', function () {
+      // Keep track of last state
+      that.lastState = that.currentState;
+
+      if (that.currentState !== H5P.Video.PAUSED && that.currentState !== H5P.Video.ENDED) {
+        // Pause video
+        that.video.pause();
+      }
+    });
+
+    // Resume playing when closing dialog
+    this.dnb.dialog.on('close', function () {
+      that.restoreTabIndexes();
+      if (that.lastState !== H5P.Video.PAUSED && that.lastState !== H5P.Video.ENDED) {
+        that.video.play();
+      }
+      that.handleAnswered();
+    });
+  }
+  else {
+    that.on('dnbEditorReady', function () {
+      that.dnb = that.editor.dnb;
+      that.dnb.dialog.disableOverlay = true;
+    });
+  }
+
+  if (!this.video.pressToPlay) {
+    if (this.currentState === InteractiveVideo.LOADED) {
+      // Add all controls
+      this.addControls();
+    }
+    else {
+      // Add splash to allow start playing before video load
+      // (play may be needed to trigger load incase preloaded="none" is default)
+      this.addSplash();
+    }
+  }
+
+  // Make sure navigation hotkey works for container
+  this.$inner.attr('tabindex', '-1');
+  this.$inner.on('keyup', e => {
+    const hasPlayButton = that.controls && that.controls.$play;
+    const startVideoKeyCode = (e.which === KEY_CODE_K);
+
+    if (hasPlayButton && startVideoKeyCode) {
+      // Skip textual input from user
+      if (e.target.nodeName === 'INPUT') {
+        return;
+      }
+
+      if (this.hasUncompletedRequiredInteractions()) {
+        const $currentFocus = $(document.activeElement);
+        const $mask = this.showWarningMask();
+        $mask.find('.h5p-button-back').click(() => $currentFocus.focus());
+      }
+      else {
+        that.controls.$play.click();
+      }
+    }
+  });
+
+  this.$inner.prepend($(this.accessibility.getHotkeyInstructor()));
+  this.$inner.append($(this.accessibility.getInteractionAnnouncer()));
+
+  this.currentState = InteractiveVideo.ATTACHED;
+
+  if (this.autoplay) {
+    that.video.play();
+  }
+
+  // Register buttons
+  this.addButtons();
+};
+
+/**
  * Attach interactive video to DOM element.
  *
  * @param {H5P.jQuery} $container
  */
-InteractiveVideo.prototype.attach = function ($container) {
+InteractiveVideo.prototype.attachEditor = function ($container) {
   var that = this;
   this.$container = $container;
 
   this.initialize();
 
   // isRoot is undefined in the editor
-  if (this.isRoot !== undefined && this.isRoot()) {
+  if (this.isRoot !== undefined ){//&& self.isRoot()) {
     this.setActivityStarted();
   }
 
@@ -711,6 +883,12 @@ InteractiveVideo.prototype.attach = function ($container) {
   }
 };
 
+
+/*InteractiveVideo.prototype.isRoot = function() {
+  return false;
+}*/
+
+
 /**
  * Attach the video to the given wrapper.
  *
@@ -808,6 +986,7 @@ InteractiveVideo.prototype.addControls = function () {
   const duration = this.getDuration();
   const humanTime = InteractiveVideo.humanizeTime(duration);
   const a11yTime = InteractiveVideo.formatTimeForA11y(duration, self.l10n);
+
   this.controls.$totalTime.find('.human-time').html(humanTime);
   this.controls.$totalTime.find('.hidden-but-read').html(`${self.l10n.totalTime} ${a11yTime}`);
   this.controls.$slider.slider('option', 'max', duration);
@@ -1906,7 +2085,6 @@ InteractiveVideo.prototype.attachControls = function ($wrapper) {
       <span class="human-time" aria-hidden="true">0:00</span>
     </time>
   </div>`).appendTo($right);
-
   const $currentTimeElement = $time.find('.h5p-current');
   self.controls.$currentTime = $currentTimeElement.find('.human-time');
   self.controls.$currentTimeA11y = $currentTimeElement.find('.hidden-but-read');
@@ -2448,7 +2626,6 @@ InteractiveVideo.prototype.addQualityChooser = function () {
 
       e.stopPropagation();
     });
-
   const menuElements = $list.find('li').get();
   menuElements.forEach(el => {
     self.qualityMenuKeyboardControls.addElement(el);
@@ -3109,8 +3286,8 @@ InteractiveVideo.prototype.disableTabIndexes = function () {
   var self = this;
   // Make all other elements in container not tabbable. When dialog is open,
   // it's like the elements behind does not exist.
-  var $dialogWrapper = self.$container.find('.h5p-dialog-wrapper');
-  self.$tabbables = self.$container.find('a[href], area[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled]), iframe, object, embed, *[tabindex], *[contenteditable]').filter(function () {
+  var $dialogWrapper = self.$inner.find('.h5p-dialog-wrapper');
+  self.$tabbables = self.$inner.find('a[href], area[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled]), iframe, object, embed, *[tabindex], *[contenteditable]').filter(function () {
     var $tabbable = $(this);
     var insideWrapper = $.contains($dialogWrapper.get(0), $tabbable.get(0));
 
@@ -3181,12 +3358,12 @@ InteractiveVideo.prototype.toggleFocusTrap = function () {
     .filter(interaction => interaction.getRequiresCompletion() && !interaction.hasFullScore());
 
   if (requiredInteractions.length > 0) {
-    this.$container
+    this.$inner
       .off('focusin')
       .on('focusin', event => this.trapFocusInInteractions(requiredInteractions, $(event.target)));
   }
   else {
-    this.$container.off('focusin', '**');
+    this.$inner.off('focusin', '**');
   }
 };
 
@@ -3225,8 +3402,7 @@ InteractiveVideo.prototype.hideOverlayMask = function () {
   self.dnb.dialog.closeOverlay();
   self.$videoWrapper.removeClass('h5p-disable-opt-out');
   self.toggleFocusTrap();
-
-  return self.$container.find('.h5p-dialog-wrapper');
+  return self.$inner.find('.h5p-dialog-wrapper');
 };
 
 
@@ -3701,3 +3877,13 @@ var getXAPIDataFromChildren = function (children) {
 
 export default InteractiveVideo;
 export const KEY_CODE_START_PAUSE = KEY_CODE_K;
+
+/**
+ * Returns true if task is checked or a word has been clicked
+ *
+ * @see {@link https://h5p.org/documentation/developers/contracts|Needed for contracts.}
+ * @returns {Boolean} Always returns true.
+ */
+InteractiveVideo.prototype.getAnswerGiven = function () {
+  return this.blankIsCorrect ? true : this.isAnswered;
+};

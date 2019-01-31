@@ -476,7 +476,7 @@ function Interaction(parameters, player, previousState) {
    * @param {boolean} [checkScore] Check score before showing dialog
    */
   var openDialog = function (checkScore) {
-    const $dialogWrapper = player.$container.find('.h5p-dialog-wrapper');
+    const $dialogWrapper = player.$inner.find('.h5p-dialog-wrapper');
 
     if (typeof instance.setActivityStarted === 'function' && typeof instance.getScore === 'function') {
       instance.setActivityStarted();
@@ -997,7 +997,7 @@ function Interaction(parameters, player, previousState) {
     }
     else if (needsAnswer.length) {
       // Show dialog. Do not use DnB because it only shows dialog when closing an overlay.
-      player.$container.find('.h5p-dialog-wrapper .h5p-dialog')
+      player.$inner.find('.h5p-dialog-wrapper .h5p-dialog')
         .show();
     }
 
