@@ -3885,5 +3885,5 @@ export const KEY_CODE_START_PAUSE = KEY_CODE_K;
  * @returns {Boolean} Always returns true.
  */
 InteractiveVideo.prototype.getAnswerGiven = function () {
-  return this.blankIsCorrect ? true : this.isAnswered;
+  return this.blankIsCorrect ? true : (this.isAnswered != undefined? this.Answered : ((self.interactions != undefined && self.interactions.length > 0)? self.interactions.getAnswerGiven() : true ));
 };
